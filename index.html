@@ -158,14 +158,25 @@
             resizeCanvas() {
               const container = this.canvas.parentElement;
               const rect = container.getBoundingClientRect();
-              this.canvas.width = rect.width;
-              this.canvas.height = rect.height;
               
-              // Ajuster la taille du joueur en maintenant le ratio 4:1
-              const baseSize = Math.min(this.canvas.width, this.canvas.height) * 0.075;
-              this.playerWidth = baseSize * 4;
-              this.playerHeight = baseSize;
-              this.obstacleWidth = Math.min(this.canvas.width, this.canvas.height) * 0.083;
+              // Forcer un ratio 3:2
+              const width = rect.width;
+              const height = (width * 2) / 3;
+              
+              this.canvas.width = width;
+              this.canvas.height = height;
+              
+              // Ajuster la taille du joueur (vache)
+              const isMobile = window.innerWidth <= 768;
+              const playerBaseHeight = height * 0.15; // 15% de la hauteur
+              this.playerHeight = playerBaseHeight;
+              this.playerWidth = playerBaseHeight * 1.5; // Ratio 1.5:1 pour la vache
+              
+              // Ajuster la taille des obstacles
+              this.obstacleWidth = width * 0.1; // 10% de la largeur
+              
+              // Ajuster les paramètres de physique
+              this.pipeGap = height * 0.35; // 35% de la hauteur pour l'espace entre les obstacles
             }
 
             bindResizeEvent() {
@@ -183,25 +194,26 @@
               if (this.player) {
                 this.player.width = this.playerWidth;
                 this.player.height = this.playerHeight;
-                this.player.x = this.canvas.width * 0.167;
+                this.player.x = this.canvas.width * 0.2; // Position à 20% de la largeur
               }
             }
 
             init() {
               this.player = {
-                x: this.canvas.width * 0.167,
+                x: this.canvas.width * 0.2, // Position à 20% de la largeur
                 y: this.canvas.height / 2,
                 width: this.playerWidth,
                 height: this.playerHeight,
                 velocity: 0,
-                gravity: this.canvas.height * 0.0015,
-                jumpForce: -this.canvas.height * 0.03
+                gravity: this.canvas.height * 0.002, // Ajusté pour un meilleur feeling
+                jumpForce: -this.canvas.height * 0.015 // Ajusté pour un meilleur feeling
               };
 
               this.obstacles = [];
               this.obstacleTimer = 0;
-              this.obstacleInterval = 1500;
+              this.obstacleInterval = 1500; // Temps entre chaque obstacle
               this.lastObstacleTime = 0;
+              this.gameSpeed = this.canvas.width * 0.005; // Vitesse proportionnelle à la largeur
               
               this.score = 0;
               this.highScore = parseInt(localStorage.getItem('flappyHighScore')) || 0;
@@ -284,18 +296,41 @@
               }
             }
 
+            createObstacle() {
+              const gap = this.pipeGap;
+              const minHeight = this.canvas.height * 0.1; // Hauteur minimum 10%
+              const maxHeight = this.canvas.height - gap - minHeight;
+              const height1 = Math.random() * (maxHeight - minHeight) + minHeight;
+              
+              this.obstacles.push(
+                {
+                  x: this.canvas.width,
+                  y: 0,
+                  width: this.obstacleWidth,
+                  height: height1,
+                  passed: false
+                },
+                {
+                  x: this.canvas.width,
+                  y: height1 + gap,
+                  width: this.obstacleWidth,
+                  height: this.canvas.height - height1 - gap,
+                  passed: false
+                }
+              );
+            }
+
             updateObstacles() {
               const now = Date.now();
               if (now - this.lastObstacleTime > this.obstacleInterval) {
                 this.createObstacle();
                 this.lastObstacleTime = now;
               }
-      
-              const speed = this.canvas.width * 0.008;
+
               for (let i = this.obstacles.length - 1; i >= 0; i--) {
                 const obstacle = this.obstacles[i];
-                obstacle.x -= speed;
-      
+                obstacle.x -= this.gameSpeed;
+
                 if (obstacle.x + obstacle.width < 0) {
                   this.obstacles.splice(i, 1);
                 } else if (!obstacle.passed && obstacle.x + obstacle.width < this.player.x) {

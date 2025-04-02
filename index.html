@@ -132,13 +132,19 @@
 
           class FlappyGame {
             constructor(playerEmail) {
-              this.playerName = playerEmail; // Utiliser directement l'email comme nom du joueur
+              this.playerName = playerEmail;
               this.canvas = document.getElementById('gameCanvas');
               if (!this.canvas) {
                 console.error('Canvas element not found');
                 return;
               }
               this.ctx = this.canvas.getContext('2d');
+              
+              // Initialiser les propriétés du jeu
+              this.gravity = 0.5;
+              this.jumpForce = -10;
+              this.obstacleWidth = 50;
+              this.gameSpeed = 3;
               
               // Ajuster la taille du canvas pour les appareils mobiles
               this.adjustCanvasSize();
@@ -148,26 +154,39 @@
               this.canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
               this.canvas.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
               
-              // Initialiser la base de données immédiatement
+              // Initialiser la base de données
               this.db = window.firebaseInstance.db;
-              
-              // Attendre l'authentification avant d'initialiser le jeu
-              window.firebaseInstance.onAuthStateChanged((user) => {
-                if (user) {
-                  console.log('Utilisateur connecté:', user.uid);
-                  this.updateLeaderboard();
-                } else {
-                  console.log('Utilisateur non connecté, tentative de reconnexion...');
-                  window.firebaseInstance.signInAnonymously();
-                }
-              });
               
               // Charger l'image du joueur
               this.playerImage = new Image();
               this.playerImage.src = 'https://cdn.shopify.com/s/files/1/0911/3894/9465/files/abondance.png?v=1743032067';
               this.playerImage.onload = () => {
                 this.init();
+                this.updateLeaderboard();
               };
+            }
+
+            adjustCanvasSize() {
+              const isMobile = window.innerWidth <= 768;
+              const container = this.canvas.parentElement;
+              const containerWidth = container.clientWidth;
+              const containerHeight = container.clientHeight;
+              
+              // Ajuster la taille du canvas
+              this.canvas.width = containerWidth;
+              this.canvas.height = containerHeight;
+              
+              // Ajuster les paramètres du jeu en fonction de la taille
+              this.gravity = isMobile ? 0.4 : 0.5;
+              this.jumpForce = isMobile ? -8 : -10;
+              this.pipeGap = isMobile ? containerHeight * 0.28 : containerHeight * 0.35;
+              this.obstacleWidth = isMobile ? containerWidth * 0.15 : containerWidth * 0.1;
+              
+              // Recalculer la position du joueur si elle existe
+              if (this.player) {
+                this.player.x = containerWidth * 0.2;
+                this.player.size = isMobile ? containerWidth * 0.1 : containerWidth * 0.08;
+              }
             }
 
             updateLeaderboard() {
@@ -225,6 +244,30 @@
               });
             }
 
+            createObstacle() {
+              const gap = this.pipeGap;
+              const minHeight = this.canvas.height * 0.125;
+              const maxHeight = this.canvas.height - gap - minHeight;
+              const height1 = Math.random() * (maxHeight - minHeight) + minHeight;
+              
+              this.obstacles.push(
+                {
+                  x: this.canvas.width,
+                  y: 0,
+                  width: this.obstacleWidth,
+                  height: height1,
+                  passed: false
+                },
+                {
+                  x: this.canvas.width,
+                  y: height1 + gap,
+                  width: this.obstacleWidth,
+                  height: this.canvas.height - height1 - gap,
+                  passed: false
+                }
+              );
+            }
+
             saveScore() {
               if (!this.playerName || !this.db) {
                 console.error('Impossible de sauvegarder le score - non connecté');
@@ -240,32 +283,6 @@
 
               const scoresRef = window.firebaseInstance.dbRef('scores');
               window.firebaseInstance.dbPush(scoresRef, scoreData);
-            }
-
-            adjustCanvasSize() {
-              const isMobile = window.innerWidth <= 768;
-              const container = this.canvas.parentElement;
-              const containerWidth = container.clientWidth;
-              const containerHeight = container.clientHeight;
-              
-              // Ajuster la taille du canvas
-              this.canvas.width = containerWidth;
-              this.canvas.height = containerHeight;
-              
-              // Ajuster les paramètres du jeu en fonction de la taille
-              this.gravity = isMobile ? 0.4 : 0.5;
-              this.jumpForce = isMobile ? -8 : -10;
-              this.pipeGap = isMobile ? containerHeight * 0.28 : containerHeight * 0.35;
-              this.pipeWidth = isMobile ? containerWidth * 0.15 : containerWidth * 0.1;
-              
-              // Recalculer la position du joueur
-              if (this.player) {
-                this.player.x = containerWidth * 0.2;
-                this.player.size = isMobile ? containerWidth * 0.1 : containerWidth * 0.08;
-              }
-              
-              // Ajuster la vitesse du jeu
-              this.gameSpeed = isMobile ? 2 : 3;
             }
 
             init() {
@@ -337,6 +354,11 @@
             }
 
             startGame() {
+              if (!this.playerName || !this.db) {
+                console.error('Impossible de démarrer le jeu - non connecté');
+                return;
+              }
+
               this.gameStarted = true;
               this.gameOver = false;
               this.score = 0;
@@ -344,8 +366,8 @@
               this.player.y = this.canvas.height / 2;
               this.player.velocity = 0;
               this.scoreSaved = false;
+              this.lastObstacleTime = Date.now();
               this.updateScore();
-              
               this.animate();
             }
 
@@ -358,30 +380,6 @@
               if (scoreElement) {
                 scoreElement.textContent = `Score: ${this.score}`;
               }
-            }
-
-            createObstacle() {
-              const gap = this.canvas.height * 0.375;
-              const minHeight = this.canvas.height * 0.125;
-              const maxHeight = this.canvas.height - gap - minHeight;
-              const height1 = Math.random() * (maxHeight - minHeight) + minHeight;
-              
-              this.obstacles.push(
-                {
-                  x: this.canvas.width,
-                  y: 0,
-                  width: this.obstacleWidth,
-                  height: height1,
-                  passed: false
-                },
-                {
-                  x: this.canvas.width,
-                  y: height1 + gap,
-                  width: this.obstacleWidth,
-                  height: this.canvas.height - height1 - gap,
-                  passed: false
-                }
-              );
             }
 
             updateObstacles() {

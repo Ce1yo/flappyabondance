@@ -138,10 +138,21 @@
                 console.error('Canvas element not found');
                 return;
               }
-              
               this.ctx = this.canvas.getContext('2d');
-              this.resizeCanvas();
-              this.bindResizeEvent();
+              
+              // Initialiser les propriétés du jeu
+              this.gravity = 0.5;
+              this.jumpForce = -10;
+              this.obstacleWidth = 50;
+              this.gameSpeed = 3;
+              
+              // Ajuster la taille du canvas pour les appareils mobiles
+              this.adjustCanvasSize();
+              window.addEventListener('resize', () => this.adjustCanvasSize());
+              
+              // Empêcher le défilement sur mobile lors du toucher du canvas
+              this.canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+              this.canvas.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
               
               // Initialiser la base de données
               this.db = window.firebaseInstance.db;
@@ -155,70 +166,143 @@
               };
             }
 
-            resizeCanvas() {
-              const container = this.canvas.parentElement;
-              const rect = container.getBoundingClientRect();
-              
-              // Forcer un ratio 3:2
-              const width = rect.width;
-              const height = (width * 2) / 3;
-              
-              this.canvas.width = width;
-              this.canvas.height = height;
-              
-              // Ajuster la taille du joueur (vache)
+            adjustCanvasSize() {
               const isMobile = window.innerWidth <= 768;
-              const playerBaseHeight = height * 0.15; // 15% de la hauteur
-              this.playerHeight = playerBaseHeight;
-              this.playerWidth = playerBaseHeight * 1.5; // Ratio 1.5:1 pour la vache
+              const container = this.canvas.parentElement;
+              const containerWidth = container.clientWidth;
+              const containerHeight = container.clientHeight;
               
-              // Ajuster la taille des obstacles
-              this.obstacleWidth = width * 0.1; // 10% de la largeur
+              // Ajuster la taille du canvas
+              this.canvas.width = containerWidth;
+              this.canvas.height = containerHeight;
               
-              // Ajuster les paramètres de physique
-              this.pipeGap = height * 0.35; // 35% de la hauteur pour l'espace entre les obstacles
+              // Ajuster les paramètres du jeu en fonction de la taille
+              this.gravity = isMobile ? 0.4 : 0.5;
+              this.jumpForce = isMobile ? -8 : -10;
+              this.pipeGap = isMobile ? containerHeight * 0.28 : containerHeight * 0.35;
+              this.obstacleWidth = isMobile ? containerWidth * 0.15 : containerWidth * 0.1;
+              
+              // Recalculer la position du joueur si elle existe
+              if (this.player) {
+                this.player.x = containerWidth * 0.2;
+                this.player.size = isMobile ? containerWidth * 0.1 : containerWidth * 0.08;
+              }
             }
 
-            bindResizeEvent() {
-              let resizeTimeout;
-              window.addEventListener('resize', () => {
-                clearTimeout(resizeTimeout);
-                resizeTimeout = setTimeout(() => {
-                  this.resizeCanvas();
-                  this.adjustGameElements();
-                }, 250);
+            updateLeaderboard() {
+              console.log('Mise à jour du tableau des scores...');
+              const scoresRef = window.firebaseInstance.dbRef('scores');
+              
+              // Désabonner des anciens listeners pour éviter les doublons
+              window.firebaseInstance.dbOff(scoresRef);
+              
+              // Créer la requête pour les 10 meilleurs scores
+              const topScoresQuery = window.firebaseInstance.dbQuery(
+                scoresRef,
+                window.firebaseInstance.dbOrderByChild('score'),
+                window.firebaseInstance.dbLimitToLast(10)
+              );
+              
+              // Écouter les changements
+              window.firebaseInstance.dbOnValue(topScoresQuery, (snapshot) => {
+                console.log('Snapshot des meilleurs scores:', snapshot.val());
+                const scores = [];
+                
+                if (snapshot.exists()) {
+                  snapshot.forEach((childSnapshot) => {
+                    const score = {
+                      id: childSnapshot.key,
+                      ...childSnapshot.val()
+                    };
+                    scores.push(score);
+                  });
+                  
+                  // Trier par score décroissant
+                  scores.sort((a, b) => b.score - a.score);
+                  
+                  // Créer le HTML pour l'affichage
+                  const leaderboardHtml = scores
+                    .map((score, index) => `
+                      <div class="score-entry ${score.name === this.playerName ? 'current-player' : ''}">
+                        <span class="rank">#${index + 1}</span>
+                        <span class="player">${score.name}</span>
+                        <span class="score">${score.score}</span>
+                      </div>
+                    `)
+                    .join('');
+                  
+                  const leaderboardElement = document.getElementById('leaderboardList');
+                  if (leaderboardElement) {
+                    leaderboardElement.innerHTML = leaderboardHtml;
+                    console.log('Tableau des scores mis à jour');
+                  }
+                } else {
+                  console.log('Aucun score trouvé dans la base de données');
+                  document.getElementById('leaderboardList').innerHTML = 
+                    '<div class="score-entry">Soyez le premier à marquer !</div>';
+                }
               });
             }
 
-            adjustGameElements() {
-              if (this.player) {
-                this.player.width = this.playerWidth;
-                this.player.height = this.playerHeight;
-                this.player.x = this.canvas.width * 0.2; // Position à 20% de la largeur
+            createObstacle() {
+              const gap = this.pipeGap;
+              const minHeight = this.canvas.height * 0.125;
+              const maxHeight = this.canvas.height - gap - minHeight;
+              const height1 = Math.random() * (maxHeight - minHeight) + minHeight;
+              
+              this.obstacles.push(
+                {
+                  x: this.canvas.width,
+                  y: 0,
+                  width: this.obstacleWidth,
+                  height: height1,
+                  passed: false
+                },
+                {
+                  x: this.canvas.width,
+                  y: height1 + gap,
+                  width: this.obstacleWidth,
+                  height: this.canvas.height - height1 - gap,
+                  passed: false
+                }
+              );
+            }
+
+            saveScore() {
+              if (!this.playerName || !this.db) {
+                console.error('Impossible de sauvegarder le score - non connecté');
+                return;
               }
+              
+              const scoreData = {
+                name: this.playerName,
+                score: this.score,
+                timestamp: Date.now(),
+                uid: window.firebaseInstance.auth.currentUser.uid
+              };
+
+              const scoresRef = window.firebaseInstance.dbRef('scores');
+              window.firebaseInstance.dbPush(scoresRef, scoreData);
             }
 
             init() {
               this.player = {
-                x: this.canvas.width * 0.2, // Position à 20% de la largeur
+                x: this.canvas.width * 0.2,
                 y: this.canvas.height / 2,
-                width: this.playerWidth,
-                height: this.playerHeight,
                 velocity: 0,
-                gravity: this.canvas.height * 0.002, // Ajusté pour un meilleur feeling
-                jumpForce: -this.canvas.height * 0.015 // Ajusté pour un meilleur feeling
+                size: this.canvas.width * 0.1
               };
-
+      
               this.obstacles = [];
               this.obstacleTimer = 0;
-              this.obstacleInterval = 1500; // Temps entre chaque obstacle
+              this.obstacleInterval = 1500;
               this.lastObstacleTime = 0;
-              this.gameSpeed = this.canvas.width * 0.005; // Vitesse proportionnelle à la largeur
               
               this.score = 0;
               this.highScore = parseInt(localStorage.getItem('flappyHighScore')) || 0;
               this.gameOver = false;
               this.gameStarted = false;
+              this.scoreSaved = false;
               
               this.updateHighScoreDisplay();
               this.bindEvents();
@@ -241,7 +325,7 @@
                 if (!this.gameStarted) {
                   this.startGame();
                 } else if (!this.gameOver) {
-                  this.player.velocity = this.player.jumpForce;
+                  this.player.velocity = this.jumpForce;
                 } else {
                   this.init();
                   this.startGame();
@@ -266,7 +350,7 @@
             }
 
             handleJump() {
-              this.player.velocity = this.player.jumpForce;
+              this.player.velocity = this.jumpForce;
             }
 
             startGame() {
@@ -281,6 +365,8 @@
               this.obstacles = [];
               this.player.y = this.canvas.height / 2;
               this.player.velocity = 0;
+              this.scoreSaved = false;
+              this.lastObstacleTime = Date.now();
               this.updateScore();
               this.animate();
             }
@@ -296,41 +382,18 @@
               }
             }
 
-            createObstacle() {
-              const gap = this.pipeGap;
-              const minHeight = this.canvas.height * 0.1; // Hauteur minimum 10%
-              const maxHeight = this.canvas.height - gap - minHeight;
-              const height1 = Math.random() * (maxHeight - minHeight) + minHeight;
-              
-              this.obstacles.push(
-                {
-                  x: this.canvas.width,
-                  y: 0,
-                  width: this.obstacleWidth,
-                  height: height1,
-                  passed: false
-                },
-                {
-                  x: this.canvas.width,
-                  y: height1 + gap,
-                  width: this.obstacleWidth,
-                  height: this.canvas.height - height1 - gap,
-                  passed: false
-                }
-              );
-            }
-
             updateObstacles() {
               const now = Date.now();
               if (now - this.lastObstacleTime > this.obstacleInterval) {
                 this.createObstacle();
                 this.lastObstacleTime = now;
               }
-
+      
+              const speed = this.canvas.width * 0.008;
               for (let i = this.obstacles.length - 1; i >= 0; i--) {
                 const obstacle = this.obstacles[i];
-                obstacle.x -= this.gameSpeed;
-
+                obstacle.x -= speed;
+      
                 if (obstacle.x + obstacle.width < 0) {
                   this.obstacles.splice(i, 1);
                 } else if (!obstacle.passed && obstacle.x + obstacle.width < this.player.x) {
@@ -347,8 +410,8 @@
               const playerHitbox = {
                 x: this.player.x,
                 y: this.player.y,
-                width: this.player.width,
-                height: this.player.height
+                width: this.player.size,
+                height: this.player.size
               };
 
               // Vérifier les collisions avec les obstacles
@@ -370,17 +433,17 @@
             }
 
             handleGameOver() {
-              if (this.score > this.highScore) {
-                localStorage.setItem('flappyHighScore', this.score);
-                this.highScore = this.score;
-                this.updateHighScoreDisplay();
+              if (!this.scoreSaved && this.score > 0) {
+                console.log('Sauvegarde du score final...');
+                this.saveScore();
+                this.scoreSaved = true;
               }
             }
 
             update() {
               if (this.gameOver) return;
 
-              this.player.velocity += this.player.gravity;
+              this.player.velocity += this.gravity;
               this.player.y += this.player.velocity;
 
               // Empêcher le joueur de sortir du canvas par le haut
@@ -389,8 +452,8 @@
                 this.player.velocity = 0;
               }
               // Empêcher le joueur de sortir du canvas par le bas (sans game over)
-              else if (this.player.y + this.player.height > this.canvas.height) {
-                this.player.y = this.canvas.height - this.player.height;
+              else if (this.player.y + this.player.size > this.canvas.height) {
+                this.player.y = this.canvas.height - this.player.size;
                 this.player.velocity = 0;
               }
 
@@ -413,22 +476,22 @@
               
               // Dessiner le joueur avec l'image en respectant le ratio
               this.ctx.save();
-              this.ctx.translate(this.player.x + this.player.width / 2, this.player.y + this.player.height / 2);
+              this.ctx.translate(this.player.x + this.player.size / 2, this.player.y + this.player.size / 2);
               this.ctx.rotate(Math.min(Math.max(this.player.velocity * 0.05, -Math.PI / 6), Math.PI / 6));
               this.ctx.drawImage(
                 this.playerImage,
-                -this.player.width / 2,
-                -this.player.height / 2,
-                this.player.width,
-                this.player.height
+                -this.player.size / 2,
+                -this.player.size / 2,
+                this.player.size,
+                this.player.size
               );
               this.ctx.restore();
-
+      
               this.ctx.fillStyle = '#000';
               for (const obstacle of this.obstacles) {
                 this.ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
               }
-
+      
               if (this.gameOver) {
                 this.ctx.fillStyle = '#000';
                 this.ctx.font = `${this.canvas.width * 0.05}px Arial`;
@@ -488,7 +551,7 @@
 .canvas-container {
   position: relative;
   width: 100%;
-  padding-bottom: 66.67%; /* Ratio 3:2 */
+  padding-bottom: 66.67%;
 }
 
 #gameCanvas {
@@ -543,6 +606,99 @@
   padding: 15px;
   border-radius: 8px;
   border: 2px solid #000;
+}
+
+.leaderboard-container {
+  background: #fff;
+  padding: 15px;
+  border-radius: 8px;
+  border: 2px solid #000;
+  margin-top: 20px;
+}
+
+.score-entry {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 10px;
+  margin: 5px 0;
+  background: #f5f5f5;
+  border-radius: 4px;
+}
+
+.current-player {
+  background: #e0e0e0;
+  font-weight: bold;
+}
+
+.auth-container {
+  background: #fff;
+  padding: 20px;
+  border-radius: 8px;
+  border: 2px solid #000;
+  margin: 20px auto;
+  max-width: 400px;
+  text-align: center;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 15px;
+}
+
+.auth-input {
+  padding: 8px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 16px;
+}
+
+.auth-button {
+  padding: 10px;
+  background-color: #000;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 16px;
+  transition: background-color 0.3s;
+}
+
+.auth-button:hover {
+  background-color: #333;
+}
+
+.auth-toggle {
+  margin-top: 10px;
+  color: #666;
+  cursor: pointer;
+}
+
+.auth-error {
+  color: red;
+  margin-top: 10px;
+}
+
+.user-info {
+  margin-top: 10px;
+  padding: 10px;
+  background-color: #f5f5f5;
+  border-radius: 4px;
+}
+
+.logout-button {
+  margin-top: 10px;
+  padding: 8px 16px;
+  background-color: #ff4444;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.logout-button:hover {
+  background-color: #cc0000;
 }
 
 @media (max-width: 768px) {

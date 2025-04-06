@@ -18,16 +18,10 @@ app.get('/test', (req, res) => {
   res.json({ message: 'Server is running!' });
 });
 
-const PORT = 3000;
-const HOST = '127.0.0.1';
+const PORT = process.env.PORT || 3000;
 
-console.log(`About to start server on ${HOST}:${PORT}...`);
+console.log('About to start server...');
 
-const server = http.createServer(app);
-
-server.listen(PORT, HOST, () => {
-  console.log(`Server running at http://${HOST}:${PORT}/`);
-  console.log('Try these endpoints:');
-  console.log(`curl http://${HOST}:${PORT}/`);
-  console.log(`curl http://${HOST}:${PORT}/test`);
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
 });
